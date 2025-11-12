@@ -2,34 +2,31 @@
 <html lang="id">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Kura-kura Interaktif — Dengan Suara Langkah</title>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+<title>Kura-kura Mobile — Swipe-hold, Suara & Musik Loop</title>
 <style>
-  :root{--bg:#bfe7a0;--ground:#7dc26f;--sky:#aee1ff}
-  html,body{height:100%;margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;display:flex;align-items:center;justify-content:center;background:linear-gradient(var(--sky), #e6f6ff 40%, var(--bg) 40%);}
-  .wrap{width:100%;max-width:1000px;height:600px;box-shadow:0 10px 30px rgba(0,0,0,0.15);border-radius:12px;overflow:hidden;position:relative;background:linear-gradient(#e6f8ff, #e8ffef);}
-  canvas{display:block;width:100%;height:100%;}
-  .controls{position:absolute;right:12px;bottom:12px;background:rgba(255,255,255,0.95);padding:8px;border-radius:8px;font-size:13px;box-shadow:0 4px 12px rgba(0,0,0,0.08);}
-  .hint{position:absolute;left:12px;bottom:12px;background:rgba(0,0,0,0.5);color:#fff;padding:8px 10px;border-radius:8px;font-size:13px;}
-  @media (max-width:600px){
-    .wrap{height:480px}
-    .controls{right:8px;bottom:8px;font-size:12px;padding:6px}
-    .hint{left:8px;bottom:8px;font-size:12px;padding:6px}
-  }
+  html,body{height:100%;margin:0;background:linear-gradient(#aee1ff,#e8ffef);font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial;}
+  .wrap{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;overflow:hidden}
+  canvas{width:100%;height:100%;display:block}
+  .ui{position:fixed;left:12px;top:12px;background:rgba(255,255,255,0.9);padding:8px;border-radius:10px;box-shadow:0 6px 18px rgba(0,0,0,0.12);font-size:13px}
+  .hint{position:fixed;left:12px;bottom:12px;background:rgba(0,0,0,0.45);color:#fff;padding:8px 10px;border-radius:8px;font-size:13px}
+  .controls{position:fixed;right:12px;top:12px;background:rgba(255,255,255,0.95);padding:8px;border-radius:8px;font-size:13px}
+  button{border-radius:8px;padding:6px 8px;border:0;background:#2f8b57;color:#fff;font-weight:600}
+  @media (min-width:900px){ .hint{display:none} }
 </style>
 </head>
 <body>
-  <div class="wrap" id="stage">
-    <canvas id="c"></canvas>
-    <div class="hint">Gunakan ← ↑ → ↓ atau WASD untuk menggerakkan kura-kura</div>
-    <div class="controls">
-      <div><strong>Kontrol</strong></div>
-      <div>← → ↑ ↓ atau WASD</div>
-      <div style="margin-top:6px;">Speed: <span id="speedVal">2</span></div>
-      <input id="speed" type="range" min="1" max="6" value="2" style="width:120px">
-      <div style="margin-top:6px;">Suara Langkah: <label><input id="sfxToggle" type="checkbox" checked> On</label></div>
-    </div>
+<div class="wrap" id="stage">
+  <canvas id="c"></canvas>
+  <div class="hint">Sentuh & geser layar — kura-kura akan bergerak selama disentuh. Ketuk layar jika audio tidak terdengar.</div>
+  <div class="controls">
+    <div><strong>Suara</strong></div>
+    <div style="margin-top:6px;">Langkah: <label><input id="sfxToggle" type="checkbox" checked> On</label></div>
+    <div style="margin-top:6px;">Musik: <label><input id="musicToggle" type="checkbox" checked> On</label></div>
+    <div style="margin-top:6px;">Volume: <input id="masterVol" type="range" min="0" max="1" step="0.01" value="0.6" style="width:120px"></div>
+    <div style="margin-top:8px;"><button id="focusBtn">Aktifkan Audio</button></div>
   </div>
+</div>
 
 <script>
 (() => {
@@ -37,24 +34,135 @@
   const stage = document.getElementById('stage');
   const ctx = canvas.getContext('2d');
   let DPR = window.devicePixelRatio || 1;
-
-  function resize() {
-    const rect = stage.getBoundingClientRect();
-    canvas.width = Math.floor(rect.width * DPR);
-    canvas.height = Math.floor(rect.height * DPR);
-    canvas.style.width = rect.width + 'px';
-    canvas.style.height = rect.height + 'px';
-    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-  }
+  function resize(){ const r=stage.getBoundingClientRect(); canvas.width=Math.floor(r.width*DPR); canvas.height=Math.floor(r.height*DPR); canvas.style.width=r.width+'px'; canvas.style.height=r.height+'px'; ctx.setTransform(DPR,0,0,DPR,0,0); }
   window.addEventListener('resize', resize);
 
-  // Audio setup (Web Audio API) - generate boop "lucuu & ringan"
+  // Audio
   let audioCtx = null;
-  function ensureAudio() {
+  let masterGain = null;
+  let musicOn = true;
+  let musicInterval = null;
+  let noiseSource = null;
+  let musicRunning = false;
+
+  function ensureAudio(){
     if (!audioCtx) {
       audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      masterGain = audioCtx.createGain();
+      masterGain.gain.value = 0.6;
+      masterGain.connect(audioCtx.destination);
     }
   }
+  // adjust master volume UI
+  const masterVol = document.getElementById('masterVol');
+  masterVol.addEventListener('input', (e)=>{
+    ensureAudio();
+    masterGain.gain.value = Number(e.target.value);
+  });
+
+  // simple feedback delay as light reverb
+  function makeReverb() {
+    const delay = audioCtx.createDelay();
+    delay.delayTime.value = 0.18;
+    const fb = audioCtx.createGain();
+    fb.gain.value = 0.35;
+    delay.connect(fb);
+    fb.connect(delay);
+    return {delay, fb};
+  }
+
+  // play a small pluck (kalimba-like) using short FM-ish synth
+  function playPluck(time, freq, gain=0.08) {
+    const o = audioCtx.createOscillator();
+    const o2 = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    const env = audioCtx.createGain();
+    o.type = 'triangle';
+    o2.type = 'sine';
+    o.frequency.setValueAtTime(freq, time);
+    o2.frequency.setValueAtTime(freq * 2, time);
+    // slight FM by modulating o frequency with o2 via detune-ish gain
+    o2.connect(o.frequency);
+    g.gain.setValueAtTime(gain, time);
+    g.gain.exponentialRampToValueAtTime(0.0001, time + 1.2);
+    env.gain.setValueAtTime(0.0001, time);
+    env.gain.linearRampToValueAtTime(1, time + 0.005);
+    env.gain.exponentialRampToValueAtTime(0.0001, time + 1.0);
+
+    const bi = audioCtx.createBiquadFilter();
+    bi.type = 'lowpass';
+    bi.frequency.value = 4800;
+
+    const reverb = makeReverb();
+    // connect
+    o.connect(g);
+    g.connect(bi);
+    bi.connect(reverb.delay);
+    reverb.delay.connect(masterGain);
+    // dry
+    bi.connect(masterGain);
+
+    // start
+    o.start(time);
+    o2.start(time);
+    env.connect(g.gain);
+    // stop later
+    o.stop(time + 1.3);
+    o2.stop(time + 1.3);
+  }
+
+  // gentle wind/bird-like noise (filtered noise loop)
+  function startNatureLoop() {
+    // create noise buffer
+    const bufferSize = 2 * audioCtx.sampleRate;
+    const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i=0;i<bufferSize;i++) data[i] = (Math.random()*2-1) * 0.3 * Math.exp(-i/(bufferSize*0.6));
+
+    const src = audioCtx.createBufferSource();
+    src.buffer = buffer;
+    src.loop = true;
+    const filt = audioCtx.createBiquadFilter();
+    filt.type = 'bandpass';
+    filt.frequency.value = 1200;
+    filt.Q.value = 0.7;
+    const g = audioCtx.createGain();
+    g.gain.value = 0.05;
+    src.connect(filt);
+    filt.connect(g);
+    g.connect(masterGain);
+    src.start();
+    noiseSource = src;
+  }
+
+  // start background music (looped pattern of soft plucks + nature)
+  function startBackgroundMusic() {
+    if (!audioCtx) return;
+    if (musicRunning) return;
+    musicRunning = true;
+    startNatureLoop();
+    // schedule gentle plucks every ~800-1200ms, with slight randomization
+    function scheduleOnce() {
+      const now = audioCtx.currentTime;
+      const freqBase = 220 + Math.random()*60;
+      playPluck(now + 0.02, freqBase + (Math.random()-0.5)*30, 0.045 + Math.random()*0.02);
+      // sometimes play a second harmony note
+      if (Math.random() > 0.4) playPluck(now + 0.12, freqBase*1.5, 0.03);
+      // next schedule
+      const next = 0.7 + Math.random()*0.8;
+      musicInterval = setTimeout(scheduleOnce, next * 1000);
+    }
+    scheduleOnce();
+  }
+
+  function stopBackgroundMusic() {
+    if (!audioCtx) return;
+    musicRunning = false;
+    if (musicInterval) { clearTimeout(musicInterval); musicInterval = null; }
+    if (noiseSource) { try { noiseSource.stop(); } catch(e){} noiseSource = null; }
+  }
+
+  // boop footsteps as before
   function playBoop(freq=800, duration=0.12, gain=0.06) {
     if (!audioCtx) return;
     const now = audioCtx.currentTime;
@@ -65,93 +173,117 @@
     g.gain.setValueAtTime(gain, now);
     g.gain.exponentialRampToValueAtTime(0.0001, now + duration);
     o.connect(g);
-    g.connect(audioCtx.destination);
+    g.connect(masterGain);
     o.start(now);
     o.stop(now + duration + 0.02);
   }
 
-  // Turtle state
-  const turtle = {
-    x: 200,
-    y: 350,
-    dir: 0, // radians, 0 to right
-    width: 90,
-    height: 60,
-    vx: 0,
-    vy: 0,
-    speed: 2,
-    legPhase: 0,
-    facing: 1, // 1 right, -1 left
-  };
-
-  // For detecting steps per leg
-  const legOffsets = [0, Math.PI/2, Math.PI, 3*Math.PI/2]; // four legs phase offsets
-  const prevLegSigns = [0,0,0,0]; // previous sign for each leg (for zero-cross detection)
-
-  // Controls
+  // Turtle state and movement (swipe-hold)
+  const turtle = { x:150, y:300, vx:0, vy:0, speed:2, legPhase:0, facing:1 };
   const keys = {};
-  window.addEventListener('keydown', (e) => { keys[e.key.toLowerCase()] = true; e.preventDefault && e.preventDefault(); });
-  window.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
+  let touching = false;
+  let touchPos = null; // {x,y} in client coords
 
-  // Speed slider
-  const speedInput = document.getElementById('speed');
-  const speedVal = document.getElementById('speedVal');
-  speedInput.addEventListener('input', (e) => {
-    turtle.speed = Number(e.target.value);
-    speedVal.textContent = e.target.value;
+  // touch controls: while touch active, compute vector to touch and move toward that direction
+  stage.addEventListener('touchstart', (e)=>{
+    e.preventDefault();
+    ensureAudio();
+    // on first user interaction, start audio if toggles allow
+    if (document.getElementById('musicToggle').checked) startBackgroundMusic();
+    touching = true;
+    const t = e.touches[0];
+    touchPos = { x: t.clientX, y: t.clientY };
+  }, {passive:false});
+  stage.addEventListener('touchmove', (e)=>{
+    e.preventDefault();
+    const t = e.touches[0];
+    touchPos = { x: t.clientX, y: t.clientY };
+  }, {passive:false});
+  stage.addEventListener('touchend', (e)=>{
+    e.preventDefault();
+    touching = false;
+    touchPos = null;
+  }, {passive:false});
+
+  // also support mouse for desktop play/testing
+  stage.addEventListener('pointerdown', (e)=>{
+    e.preventDefault();
+    ensureAudio();
+    if (document.getElementById('musicToggle').checked) startBackgroundMusic();
+    touching = true;
+    touchPos = { x: e.clientX, y: e.clientY };
+  });
+  window.addEventListener('pointermove', (e)=>{
+    if (!touching) return;
+    touchPos = { x: e.clientX, y: e.clientY };
+  });
+  window.addEventListener('pointerup', (e)=>{
+    touching = false;
+    touchPos = null;
   });
 
+  // step detection like before
+  const legOffsets = [0, Math.PI/2, Math.PI, 3*Math.PI/2];
+  const prevLegSigns = [0,0,0,0];
   const sfxToggle = document.getElementById('sfxToggle');
+  const musicToggle = document.getElementById('musicToggle');
+  musicToggle.addEventListener('change', ()=>{
+    if (!audioCtx) return;
+    if (musicToggle.checked) startBackgroundMusic(); else stopBackgroundMusic();
+  });
 
-  // Simple terrain boundaries
-  function clampTurtle() {
+  document.getElementById('focusBtn').addEventListener('click', ()=>{
+    ensureAudio();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    if (musicToggle.checked) startBackgroundMusic();
+  });
+
+  function clamp() {
     const pad = 40;
     turtle.x = Math.max(pad, Math.min(stage.clientWidth - pad, turtle.x));
-    turtle.y = Math.max(200, Math.min(stage.clientHeight - 30, turtle.y));
+    turtle.y = Math.max(140, Math.min(stage.clientHeight - 30, turtle.y));
   }
 
   function update(dt) {
-    // dt in seconds
-    let ax = 0, ay = 0;
-    if (keys['arrowleft'] || keys['a']) ax -= 1;
-    if (keys['arrowright'] || keys['d']) ax += 1;
-    if (keys['arrowup'] || keys['w']) ay -= 1;
-    if (keys['arrowdown'] || keys['s']) ay += 1;
-
-    // Normalize
-    if (ax !== 0 || ay !== 0) {
-      const len = Math.hypot(ax, ay);
-      ax /= len; ay /= len;
-      turtle.vx = ax * turtle.speed * 60 * dt;
-      turtle.vy = ay * turtle.speed * 60 * dt;
-      turtle.legPhase += 8 * dt * turtle.speed; // animate legs faster when speed higher
-      turtle.facing = (ax < 0) ? -1 : (ax > 0) ? 1 : turtle.facing;
+    // movement towards touchPos while touching
+    if (touching && touchPos) {
+      // map touch client coords to canvas coords (canvas fills screen)
+      const rect = canvas.getBoundingClientRect();
+      const tx = touchPos.x - rect.left;
+      const ty = touchPos.y - rect.top;
+      let ax = tx - turtle.x;
+      let ay = ty - turtle.y;
+      const dist = Math.hypot(ax, ay);
+      if (dist > 6) {
+        ax /= dist; ay /= dist;
+        turtle.vx = ax * turtle.speed * 200 * dt;
+        turtle.vy = ay * turtle.speed * 200 * dt;
+        turtle.legPhase += 8 * dt * turtle.speed;
+        turtle.facing = (ax < 0) ? -1 : 1;
+      } else {
+        turtle.vx *= 0.6; turtle.vy *= 0.6;
+        turtle.legPhase += 2 * dt * (Math.hypot(turtle.vx, turtle.vy));
+      }
     } else {
-      // slow down
-      turtle.vx *= 0.8;
-      turtle.vy *= 0.8;
-      turtle.legPhase += 2 * dt * (Math.hypot(turtle.vx, turtle.vy)); // small movement when coasting
+      // slow down to stop
+      turtle.vx *= 0.8; turtle.vy *= 0.8;
+      turtle.legPhase += 2 * dt * (Math.hypot(turtle.vx, turtle.vy));
     }
 
-    // Step detection per leg - trigger boop on upward zero-cross of leg sine
+    // step detection & boop
     for (let i=0;i<4;i++) {
       const phase = turtle.legPhase + legOffsets[i];
       const val = Math.sin(phase);
       const sign = val >= 0 ? 1 : -1;
-      // detect transition from negative to positive => leg lifted forward -> step
       if (prevLegSigns[i] <= 0 && sign > 0) {
-        // trigger sound with slight freq variation per leg and based on speed
         if (sfxToggle.checked) {
           try {
             ensureAudio();
-            const baseFreq = 650 + i*60; // small variation per leg
-            const freq = baseFreq + turtle.speed*40;
-            // soft random jitter
-            const jitter = (Math.random()-0.5)*40;
+            const baseFreq = 650 + i*50;
+            const freq = baseFreq + Math.min(turtle.speed*40, 120);
+            const jitter = (Math.random()-0.5)*30;
             playBoop(freq + jitter, 0.12, 0.04 + turtle.speed*0.01);
-          } catch(e) {
-            // if audio blocked, ignore
-          }
+          } catch(e){}
         }
       }
       prevLegSigns[i] = sign;
@@ -159,16 +291,12 @@
 
     turtle.x += turtle.vx;
     turtle.y += turtle.vy;
-
-    clampTurtle();
+    clamp();
   }
 
   function drawGround() {
     const w = stage.clientWidth, h = stage.clientHeight;
-    // sky gradient already on body; draw rolling grassy hills
     ctx.save();
-    ctx.translate(0, 0);
-    // draw hill
     const grad = ctx.createLinearGradient(0, h*0.6, 0, h);
     grad.addColorStop(0, '#95d36b');
     grad.addColorStop(1, '#67b04a');
@@ -181,193 +309,78 @@
     ctx.lineTo(0, h);
     ctx.closePath();
     ctx.fill();
-
-    // grass details
-    ctx.fillStyle = 'rgba(255,255,255,0.06)';
+    // grass
+    ctx.fillStyle = 'rgba(255,255,255,0.04)';
     for (let i=0;i<60;i++) {
-      const gx = (i/60)*w + (Math.sin(i*0.5 + Date.now()*0.001)*8);
-      const gy = h*0.72 + Math.cos(i*0.4)*6;
+      const gx = (i/60)*w + (Math.sin(i*0.5 + Date.now()*0.001)*6);
+      const gy = h*0.72 + Math.cos(i*0.4)*5;
       ctx.fillRect(gx, gy, 3, 10);
     }
     ctx.restore();
   }
 
-  // draw turtle programmatically
-  function drawTurtle(t) {
+  function drawTurtle() {
+    const t = turtle;
     ctx.save();
     ctx.translate(t.x, t.y);
     ctx.scale(1,1);
-
-    // body bobbing based on legPhase
     const bob = Math.sin(t.legPhase*1.2) * 3;
-
-    // facing flip
     ctx.scale(t.facing,1);
 
     // shadow
     ctx.beginPath();
     ctx.ellipse(0, 34, 46, 12, 0, 0, Math.PI*2);
-    ctx.fillStyle = 'rgba(0,0,0,0.18)';
-    ctx.fill();
+    ctx.fillStyle = 'rgba(0,0,0,0.18)'; ctx.fill();
 
-    // shell (ellipse)
+    // shell
     ctx.save();
     ctx.translate(0, bob);
-    ctx.beginPath();
-    ctx.ellipse(0, 0, 60, 42, 0, 0, Math.PI*2);
-    const shellGrad = ctx.createLinearGradient(-60, -30, 60, 30);
-    shellGrad.addColorStop(0, '#7a9a3a');
-    shellGrad.addColorStop(0.5, '#55802a');
-    shellGrad.addColorStop(1, '#466a21');
-    ctx.fillStyle = shellGrad;
-    ctx.fill();
-    ctx.lineWidth = 3;
-    ctx.strokeStyle = '#2f4f14';
-    ctx.stroke();
-
-    // shell pattern (hex-ish)
+    ctx.beginPath(); ctx.ellipse(0,0,60,42,0,0,Math.PI*2);
+    const shellGrad = ctx.createLinearGradient(-60,-30,60,30);
+    shellGrad.addColorStop(0,'#7a9a3a'); shellGrad.addColorStop(0.5,'#55802a'); shellGrad.addColorStop(1,'#466a21');
+    ctx.fillStyle = shellGrad; ctx.fill();
+    ctx.lineWidth = 3; ctx.strokeStyle = '#2f4f14'; ctx.stroke();
     ctx.fillStyle = 'rgba(255,255,255,0.06)';
-    for (let r=0;r<3;r++) {
-      for (let c=-r;c<=r;c++) {
-        ctx.beginPath();
-        const rx = c*28 + (r%2?14:0);
-        const ry = r*14 - 6;
-        ctx.ellipse(rx, ry, 18, 10, 0, 0, Math.PI*2);
-        ctx.fill();
-      }
-    }
+    for (let r=0;r<3;r++) for (let c=-r;c<=r;c++){ ctx.beginPath(); const rx=c*28 + (r%2?14:0); const ry=r*14-6; ctx.ellipse(rx,ry,18,10,0,0,Math.PI*2); ctx.fill(); }
     ctx.restore();
 
     // head
-    ctx.save();
-    ctx.translate(66, -6 + bob/2);
-    const headTilt = Math.sin(t.legPhase)*0.12;
-    ctx.rotate(headTilt);
-    ctx.beginPath();
-    ctx.ellipse(0, 0, 18, 14, 0, 0, Math.PI*2);
-    ctx.fillStyle = '#6aa14a';
-    ctx.fill();
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = '#3f6b2b';
-    ctx.stroke();
-    // eye
-    ctx.beginPath();
-    ctx.fillStyle = '#fff';
-    ctx.ellipse(6, -4, 5, 4, 0, 0, Math.PI*2);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.fillStyle = '#111';
-    ctx.ellipse(7, -4, 2, 2, 0, 0, Math.PI*2);
-    ctx.fill();
+    ctx.save(); ctx.translate(66, -6 + bob/2); const headTilt = Math.sin(t.legPhase)*0.12; ctx.rotate(headTilt);
+    ctx.beginPath(); ctx.ellipse(0,0,18,14,0,0,Math.PI*2); ctx.fillStyle='#6aa14a'; ctx.fill(); ctx.lineWidth=2; ctx.strokeStyle='#3f6b2b'; ctx.stroke();
+    ctx.beginPath(); ctx.fillStyle='#fff'; ctx.ellipse(6,-4,5,4,0,0,Math.PI*2); ctx.fill(); ctx.beginPath(); ctx.fillStyle='#111'; ctx.ellipse(7,-4,2,2,0,0,Math.PI*2); ctx.fill();
     ctx.restore();
 
     // tail
-    ctx.save();
-    ctx.translate(-68, 4 + bob/2);
-    ctx.rotate(-0.4 + Math.sin(t.legPhase)*0.06);
-    ctx.beginPath();
-    ctx.moveTo(0,0);
-    ctx.lineTo(-10,6);
-    ctx.lineTo(2,6);
-    ctx.closePath();
-    ctx.fillStyle = '#4b7d2f';
-    ctx.fill();
-    ctx.restore();
+    ctx.save(); ctx.translate(-68, 4 + bob/2); ctx.rotate(-0.4 + Math.sin(t.legPhase)*0.06); ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(-10,6); ctx.lineTo(2,6); ctx.closePath(); ctx.fillStyle='#4b7d2f'; ctx.fill(); ctx.restore();
 
-    // legs (4) - animate using legPhase
-    const legOffset = 44;
-    const legW = 18, legH = 10;
-    const phase = t.legPhase;
-    const legSwing = (i) => Math.sin(phase + i*Math.PI/2) * 8;
-
-    // front-right
-    ctx.save();
-    ctx.translate(36, 18 + bob);
-    ctx.rotate((legSwing(0) * Math.PI/180) * 0.8);
-    ctx.beginPath();
-    ctx.ellipse(0, 0, legW, legH, 0, 0, Math.PI*2);
-    ctx.fillStyle = '#4b7d2f';
-    ctx.fill();
-    ctx.restore();
-
-    // front-left
-    ctx.save();
-    ctx.translate(12, 20 + bob);
-    ctx.rotate((legSwing(1) * Math.PI/180) * 0.8);
-    ctx.beginPath();
-    ctx.ellipse(0, 0, legW, legH, 0, 0, Math.PI*2);
-    ctx.fillStyle = '#4b7d2f';
-    ctx.fill();
-    ctx.restore();
-
-    // back-right
-    ctx.save();
-    ctx.translate(-24, 20 + bob);
-    ctx.rotate((legSwing(2) * Math.PI/180) * 0.8);
-    ctx.beginPath();
-    ctx.ellipse(0, 0, legW, legH, 0, 0, Math.PI*2);
-    ctx.fillStyle = '#4b7d2f';
-    ctx.fill();
-    ctx.restore();
-
-    // back-left
-    ctx.save();
-    ctx.translate(-46, 18 + bob);
-    ctx.rotate((legSwing(3) * Math.PI/180) * 0.8);
-    ctx.beginPath();
-    ctx.ellipse(0, 0, legW, legH, 0, 0, Math.PI*2);
-    ctx.fillStyle = '#4b7d2f';
-    ctx.fill();
-    ctx.restore();
+    // legs
+    const legW=18, legH=10, phase=t.legPhase;
+    const legSwing = (i)=> Math.sin(phase + i*Math.PI/2) * 8;
+    ctx.save(); ctx.translate(36, 18 + bob); ctx.rotate((legSwing(0) * Math.PI/180) * 0.8); ctx.beginPath(); ctx.ellipse(0,0,legW,legH,0,0,Math.PI*2); ctx.fillStyle='#4b7d2f'; ctx.fill(); ctx.restore();
+    ctx.save(); ctx.translate(12, 20 + bob); ctx.rotate((legSwing(1) * Math.PI/180) * 0.8); ctx.beginPath(); ctx.ellipse(0,0,legW,legH,0,0,Math.PI*2); ctx.fillStyle='#4b7d2f'; ctx.fill(); ctx.restore();
+    ctx.save(); ctx.translate(-24, 20 + bob); ctx.rotate((legSwing(2) * Math.PI/180) * 0.8); ctx.beginPath(); ctx.ellipse(0,0,legW,legH,0,0,Math.PI*2); ctx.fillStyle='#4b7d2f'; ctx.fill(); ctx.restore();
+    ctx.save(); ctx.translate(-46, 18 + bob); ctx.rotate((legSwing(3) * Math.PI/180) * 0.8); ctx.beginPath(); ctx.ellipse(0,0,legW,legH,0,0,Math.PI*2); ctx.fillStyle='#4b7d2f'; ctx.fill(); ctx.restore();
 
     ctx.restore();
   }
 
   let last = performance.now();
   function loop(now) {
-    const dt = Math.min(0.05, (now - last) / 1000);
+    const dt = Math.min(0.05, (now - last)/1000);
     last = now;
     update(dt);
-
-    // clear
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-
+    ctx.clearRect(0,0,canvas.width,canvas.height);
     drawGround();
-    drawTurtle(turtle);
-
+    drawTurtle();
     requestAnimationFrame(loop);
   }
 
-  // initialize and start
+  // init
   resize();
-  last = performance.now();
-  requestAnimationFrame(loop);
+  last = performance.now(); requestAnimationFrame(loop);
 
-  // click to focus for keyboard on mobile
-  stage.addEventListener('click', ()=>{ window.focus(); ensureAudio(); });
-
-  // touch controls for mobile: simple virtual joystick
-  let touchStart = null;
-  stage.addEventListener('touchstart', (e)=>{
-    const t = e.touches[0];
-    touchStart = {x: t.clientX, y: t.clientY};
-    ensureAudio();
-  }, {passive:true});
-  stage.addEventListener('touchmove', (e)=>{
-    if(!touchStart) return;
-    const t = e.touches[0];
-    const dx = t.clientX - touchStart.x;
-    const dy = t.clientY - touchStart.y;
-    // set keys as if WASD
-    keys['a'] = dx < -20;
-    keys['d'] = dx > 20;
-    keys['w'] = dy < -20;
-    keys['s'] = dy > 20;
-  }, {passive:true});
-  stage.addEventListener('touchend', ()=>{
-    touchStart = null;
-    keys['a']=keys['d']=keys['w']=keys['s']=false;
-  });
+  // pointer focus button to ensure audio on iOS/Chrome
+  // button handled above
 
 })(); // IIFE
 </script>
